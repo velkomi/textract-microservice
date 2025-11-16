@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 from docx import Document
+import subprocess
 import os
 import logging
-import subprocess
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -37,15 +37,48 @@ def extract_text():
         
         if filename.endswith('.docx'):
             # Парсинг .docx через python-docx
-            doc = Document(temp_path)
-            text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+            try:
+                doc = Document(temp_path)
+                text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+                logger.info(f"Successfully extracted text from .docx file")
+            except Exception as e:
+                logger.error(f"Error reading .docx: {str(e)}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Could not read .docx file: {str(e)}'
+                }), 500
         
         elif filename.endswith('.doc'):
-            # Для .doc используем textract
+            # Для .doc используем antiword (линукс команда)
             try:
-                text = textract.process(temp_path).decode('utf-8')
+                result = subprocess.run(
+                    ['antiword', temp_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    logger.error(f"antiword failed: {result.stderr}")
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'antiword failed: {result.stderr}'
+                    }), 500
+                text = result.stdout
+                logger.info(f"Successfully extracted text from .doc file using antiword")
+            except FileNotFoundError:
+                logger.error("antiword command not found")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'antiword not installed on system'
+                }), 500
+            except subprocess.TimeoutExpired:
+                logger.error("antiword timeout")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'File processing timeout'
+                }), 500
             except Exception as e:
-                logger.error(f"Textract error: {str(e)}")
+                logger.error(f"antiword error: {str(e)}")
                 return jsonify({
                     'status': 'error',
                     'message': f'Could not process .doc file: {str(e)}'
@@ -64,7 +97,8 @@ def extract_text():
         return jsonify({
             'status': 'success',
             'filename': file.filename,
-            'text': text
+            'text': text,
+            'file_type': 'docx' if filename.endswith('.docx') else 'doc'
         }), 200
     
     except Exception as e:
